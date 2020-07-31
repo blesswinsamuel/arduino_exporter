@@ -13,5 +13,4 @@ RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o rpi_exporter
 FROM scratch
 WORKDIR /app
 COPY --from=build-env /src/rpi_exporter /app/
-USER 65534
 ENTRYPOINT ["/app/rpi_exporter"]
