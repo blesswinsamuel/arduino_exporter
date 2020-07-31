@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/d2r2/go-dht"
+	"github.com/MichaelS11/go-dht"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/log"
@@ -16,6 +16,9 @@ var (
 	listen = flag.String("listen",
 		"localhost:9153",
 		"listen address")
+	metricsPath = flag.String("metrics_path",
+		"/metrics",
+		"path under which metrics are served")
 )
 
 var (
@@ -30,20 +33,22 @@ var (
 )
 
 func init() {
-	prometheus.MustRegister(leases)
+	prometheus.MustRegister(temperatureMetric)
+	prometheus.MustRegister(humidityMetric)
 }
 
 type server struct {
 	promHandler http.Handler
+	dht         *dht.DHT
 }
 
 func (s *server) metrics(w http.ResponseWriter, r *http.Request) {
 	var eg errgroup.Group
 
 	eg.Go(func() error {
-		temperature, humidity, retried, err := dht.ReadDHTxxWithRetry(dht.DHT11, 4, false, 5)
+		temperature, humidity, err := s.dht.ReadRetry(11)
 		if err != nil {
-			return fmt.Errorf("failed to read temperature (retried %d times): %v", retried, err)
+			return fmt.Errorf("failed to read temperature: %v", err)
 		}
 		temperatureMetric.Set(temperature)
 		humidityMetric.Set(humidity)
@@ -60,8 +65,22 @@ func (s *server) metrics(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	flag.Parse()
+	err := dht.HostInit()
+	if err != nil {
+		log.Fatal("HostInit error:", err)
+	}
+	dht, err := dht.NewDHT("GPIO4", dht.Celsius, "dht11")
+	if err != nil {
+		log.Fatal("NewDHT error:", err)
+	}
+	temperature, humidity, err := dht.ReadRetry(6)
+	if err != nil {
+		log.Fatalf("failed to read temperature: %v", err)
+	}
+	log.Infof("Temperature = %v*C, Humidity = %v%%\n", temperature, humidity)
 	s := &server{
 		promHandler: promhttp.Handler(),
+		dht:         dht,
 	}
 	http.HandleFunc(*metricsPath, s.metrics)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
