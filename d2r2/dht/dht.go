@@ -1,11 +1,15 @@
 package dht
 
 import (
-	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"os"
+	"syscall"
 	"time"
 
+	"github.com/d2r2/go-shell"
+	"github.com/davecgh/go-spew/spew"
 	"github.com/gavv/monotime"
 	"github.com/kidoman/embd"
 	_ "github.com/kidoman/embd/host/rpi"
@@ -13,9 +17,10 @@ import (
 	//"reflect"
 )
 
+// SensorType signify what sensor in use.
 type SensorType int
 
-// Implement Stringer interface.
+// String implement Stringer interface.
 func (this SensorType) String() string {
 	if this == DHT11 {
 		return "DHT11"
@@ -29,7 +34,7 @@ func (this SensorType) String() string {
 }
 
 const (
-	// Most populare sensor
+	// Most popular sensor
 	DHT11 SensorType = iota + 1
 	// More expensive and precise than DHT11
 	DHT22
@@ -37,7 +42,7 @@ const (
 	AM2302 = DHT22
 )
 
-// Keep pulse state with how long it lasted.
+// Pulse keep pulse state with how long it lasted.
 type Pulse struct {
 	Value    byte
 	Duration time.Duration
@@ -52,7 +57,7 @@ func dialDHTxxAndGetResponse(pin int, boostPerfFlag bool) ([]Pulse, error) {
 		boost = 1
 	}
 
-	// Return array: [pulse, duration, pulse, duration, ...]
+	// return array: [pulse, duration, pulse, duration, ...]
 	err := dialDHTxxAndRead(int(pin), boost, &arr)
 	if err != nil {
 		return nil, fmt.Errorf("Error during call C.dial_DHTxx_and_read(): %v", err)
@@ -116,7 +121,7 @@ func decodeByte(pulses []Pulse, start int) (byte, error) {
 // Decode bunch of pulse read from DHTxx sensors.
 // Use pdf specifications from /docs folder to read 5 bytes and
 // convert them to temperature and humidity.
-func decodeDHT11Pulses(sensorType SensorType, pulses []Pulse) (temperature float32,
+func decodeDHTxxPulses(sensorType SensorType, pulses []Pulse) (temperature float32,
 	humidity float32, err error) {
 	if len(pulses) == 85 {
 		pulses = pulses[3:]
@@ -155,14 +160,20 @@ func decodeDHT11Pulses(sensorType SensorType, pulses []Pulse) (temperature float
 	if err != nil {
 		return -1, -1, err
 	}
-	// Produce data integrity check
-	if sum != byte(b0+b1+b2+b3) {
-		err := fmt.Errorf("Control sum %d doesn't match %d (%d+%d+%d+%d)",
-			sum, byte(b0+b1+b2+b3), b0, b1, b2, b3)
+	// Produce data consistency check
+	calcSum := byte(b0 + b1 + b2 + b3)
+	if sum != calcSum {
+		err := errors.New(spew.Sprintf(
+			"CRCs doesn't match: checksum from sensor(%v) != "+
+				"calculated checksum(%v=%v+%v+%v+%v)",
+			sum, calcSum, b0, b1, b2, b3))
 		return -1, -1, err
+	} else {
+		lg.Debugf("CRCs verified: checksum from sensor(%v) = calculated checksum(%v=%v+%v+%v+%v)",
+			sum, calcSum, b0, b1, b2, b3)
 	}
 	// Debug output for 5 bytes
-	lg.Debug("Five bytes from DHTxx: [%d, %d, %d, %d, %d]", b0, b1, b2, b3, sum)
+	lg.Debugf("Decoded from DHTxx sensor: [%d, %d, %d, %d, %d]", b0, b1, b2, b3, sum)
 	// Extract temprature and humidity depending on sensor type
 	temperature, humidity = 0.0, 0.0
 	if sensorType == DHT11 {
@@ -184,15 +195,15 @@ func decodeDHT11Pulses(sensorType SensorType, pulses []Pulse) (temperature float
 
 // Print bunch of pulses for debug purpose.
 func printPulseArrayForDebug(pulses []Pulse) {
-	var buf bytes.Buffer
-	for i, pulse := range pulses {
-		buf.WriteString(fmt.Sprintf("pulse %3d: %v, %v\n", i,
-			pulse.Value, pulse.Duration))
-	}
-	lg.Debug("Pulse count %d:\n%v", len(pulses), buf.String())
+	// var buf bytes.Buffer
+	// for i, pulse := range pulses {
+	// 	buf.WriteString(fmt.Sprintf("pulse %3d: %v, %v\n", i,
+	// 		pulse.Value, pulse.Duration))
+	// }
+	lg.Debugf("Pulses received from DHTxx sensor: %v", pulses)
 }
 
-// Send activation request to DHTxx sensor via specific pin.
+// ReadDHTxx send activation request to DHTxx sensor via specific pin.
 // Then decode pulses sent back with asynchronous
 // protocol specific for DHTxx sensors.
 //
@@ -216,14 +227,14 @@ func ReadDHTxx(sensorType SensorType, pin int,
 	// Output debug information
 	printPulseArrayForDebug(pulses)
 	// Decode pulses
-	temp, hum, err := decodeDHT11Pulses(sensorType, pulses)
+	temp, hum, err := decodeDHTxxPulses(sensorType, pulses)
 	if err != nil {
 		return -1, -1, err
 	}
 	return temp, hum, nil
 }
 
-// Send activation request to DHTxx sensor via specific pin.
+// ReadDHTxxWithRetry send activation request to DHTxx sensor via specific pin.
 // Then decode pulses sent back with asynchronous
 // protocol specific for DHTxx sensors. Retry n times in case of failure.
 //
@@ -241,17 +252,62 @@ func ReadDHTxx(sensorType SensorType, pin int,
 // 4) error if present.
 func ReadDHTxxWithRetry(sensorType SensorType, pin int, boostPerfFlag bool,
 	retry int) (temperature float32, humidity float32, retried int, err error) {
+	// Create default context
+	ctx := context.Background()
+	// Reroute call
+	return ReadDHTxxWithContextAndRetry(ctx, sensorType, pin,
+		boostPerfFlag, retry)
+}
+
+// ReadDHTxxWithContextAndRetry send activation request to DHTxx sensor via specific pin.
+// Then decode pulses sent back with asynchronous
+// protocol specific for DHTxx sensors. Retry n times in case of failure.
+//
+// Input parameters:
+// 1) parent context; could be used to manage life-cycle
+//  of sensor request session from code outside;
+// 2) sensor type: DHT11, DHT22 (aka AM2302);
+// 3) pin number from gadget GPIO to interract with sensor;
+// 4) boost GPIO performance flag should be used for old devices
+//  such as Raspberry PI 1 (this will require root privileges);
+// 5) how many times to retry until success either сounter is zeroed.
+//
+// Return:
+// 1) temperature in Celsius;
+// 2) humidity in percent;
+// 3) number of extra retries data from sensor;
+// 4) error if present.
+func ReadDHTxxWithContextAndRetry(parent context.Context, sensorType SensorType, pin int,
+	boostPerfFlag bool, retry int) (temperature float32, humidity float32, retried int, err error) {
+	// create context with cancellation possibility
+	ctx, cancel := context.WithCancel(parent)
+	// use done channel as a trigger to exit from signal waiting goroutine
+	done := make(chan struct{})
+	defer close(done)
+	// build actual signals list to control
+	signals := []os.Signal{os.Kill, os.Interrupt}
+	if shell.IsLinuxMacOSFreeBSD() {
+		signals = append(signals, syscall.SIGTERM)
+	}
+	// run goroutine waiting for OS termination events, including keyboard Ctrl+C
+	shell.CloseContextOnSignals(cancel, done, signals...)
 	retried = 0
 	for {
 		temp, hum, err := ReadDHTxx(sensorType, pin, boostPerfFlag)
 		if err != nil {
 			if retry > 0 {
-				lg.Warning("ReadDHTxx:", err)
+				lg.Warning(err)
 				retry--
 				retried++
-				// Sleep before new attempt
-				time.Sleep(1500 * time.Millisecond)
-				continue
+				select {
+				// Check for termination request.
+				case <-ctx.Done():
+					// Interrupt loop, if pending termination.
+					return -1, -1, retried, ctx.Err()
+				// sleep before new attempt 1.5 sec according to specification
+				case <-time.After(1500 * time.Millisecond):
+					continue
+				}
 			}
 			return -1, -1, retried, err
 		}
@@ -324,51 +380,6 @@ func gpioReadSeqUntilTimeout(p embd.DigitalPin, timeoutMsec int,
 	for i = 0; i <= k; i++ {
 		(*arr)[i*2] = int(values[i*2])
 		(*arr)[i*2+1] = int(values[i*2+1])
-	}
-
-	return nil
-}
-
-/* This just blinks an LED.  This is extremely unnecessary in this
- * 	implementation as 1)  this has no correlation to DHTxx functionality, 2) the
- *	embd library has a similar function and 3)  it's dead simple to write, why
- *	would you even need the function already in a library?
- *
- *	Regardless, my ranting takes up about as much disk space as this function,
- *	so it doesn't really hurt to include it in the odd case that someone is
- *  actually using it
- */
-func blinkNTimes(pin int, n int) error {
-	if err := embd.InitGPIO(); err != nil {
-		return err
-	}
-	defer embd.CloseGPIO()
-
-	p, err := embd.NewDigitalPin(pin)
-	if err != nil {
-		return err
-	}
-
-	if err := p.SetDirection(embd.Out); err != nil {
-		return err
-	}
-
-	for i := 0; i < n; i++ {
-		if err := p.Write(embd.High); err != nil {
-			return err
-		}
-
-		time.Sleep(100 * time.Millisecond)
-
-		if err := p.Write(embd.Low); err != nil {
-			return err
-		}
-
-		time.Sleep(100 * time.Millisecond)
-	}
-	// Set pin to high
-	if err := p.Write(embd.High); err != nil {
-		return err
 	}
 
 	return nil
