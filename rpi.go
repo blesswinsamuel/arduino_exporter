@@ -69,7 +69,7 @@ func main() {
 	if err != nil {
 		log.Fatal("HostInit error:", err)
 	}
-	dht, err := dht.NewDHT("GPIO4", dht.Celsius, "dht11")
+	dht, err := dht.NewDHT("P1_7", dht.Celsius, "dht11")
 	if err != nil {
 		log.Fatal("NewDHT error:", err)
 	}
@@ -85,9 +85,9 @@ func main() {
 	http.HandleFunc(*metricsPath, s.metrics)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<html>
-			<head><title>Dnsmasq Exporter</title></head>
+			<head><title>Raspberry Pi Exporter</title></head>
 			<body>
-			<h1>Dnsmasq Exporter</h1>
+			<h1>Raspberry Pi Exporter</h1>
 			<p><a href="` + *metricsPath + `">Metrics</a></p>
 			</body></html>`))
 	})

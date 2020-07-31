@@ -7,11 +7,11 @@ WORKDIR /src
 
 ARG TARGETOS
 ARG TARGETARCH
-RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o dnsmasq_exporter
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o rpi_exporter
 
 # final stage
 FROM scratch
 WORKDIR /app
-COPY --from=build-env /src/dnsmasq_exporter /app/
+COPY --from=build-env /src/rpi_exporter /app/
 USER 65534
-ENTRYPOINT ["/app/dnsmasq_exporter"]
+ENTRYPOINT ["/app/rpi_exporter"]
