@@ -21,36 +21,59 @@ import (
 type SensorType int
 
 // String implement Stringer interface.
-func (this SensorType) String() string {
-	if this == DHT11 {
+func (v SensorType) String() string {
+	if v == DHT11 {
 		return "DHT11"
-	} else if this == DHT22 {
-		return "DHT22"
-	} else if this == AM2302 {
-		return "AM2302"
+	} else if v == DHT12 {
+		return "DHT12"
+	} else if v == DHT22 || v == AM2302 {
+		return "DHT22|AM2302"
 	} else {
 		return "!!! unknown !!!"
 	}
 }
 
+// GetHandshakeDuration specify signal duration necessary
+// to initiate sensor response.
+func (v SensorType) GetHandshakeDuration() time.Duration {
+	if v == DHT11 {
+		return 18 * time.Millisecond
+	} else if v == DHT12 {
+		return 200 * time.Millisecond
+	} else if v == DHT22 || v == AM2302 {
+		return 18 * time.Millisecond
+	} else {
+		return 0
+	}
+}
+
+// GetRetryTimeout return recommended timeout necessary
+// to wait before new round of data exchange.
+func (v SensorType) GetRetryTimeout() time.Duration {
+	return 1500 * time.Millisecond
+}
+
 const (
-	// Most popular sensor
+	// DHT11 is most popular sensor
 	DHT11 SensorType = iota + 1
-	// More expensive and precise than DHT11
+	// DHT12 is more precise than DHT11 (has scale parts)
+	DHT12
+	// DHT22 is more expensive and precise than DHT11
 	DHT22
-	// Aka DHT22
+	// AM2302 aka DHT22
 	AM2302 = DHT22
 )
 
-// Pulse keep pulse state with how long it lasted.
+// Pulse keep pulse signal state with how long it lasted.
 type Pulse struct {
 	Value    byte
 	Duration time.Duration
 }
 
 // Activate sensor and get back bunch of pulses for further decoding.
-func dialDHTxxAndGetResponse(pin int, boostPerfFlag bool) ([]Pulse, error) {
+func dialDHTxxAndGetResponse(pin int, handshakeDur time.Duration, boostPerfFlag bool) ([]Pulse, error) {
 	var arr []int
+	var hsDurUsec int = int(handshakeDur / time.Microsecond)
 	//var list []int
 	var boost int = 0
 	if boostPerfFlag {
@@ -58,7 +81,7 @@ func dialDHTxxAndGetResponse(pin int, boostPerfFlag bool) ([]Pulse, error) {
 	}
 
 	// return array: [pulse, duration, pulse, duration, ...]
-	err := dialDHTxxAndRead(int(pin), boost, &arr)
+	err := dialDHTxxAndRead(int(pin), hsDurUsec, boost, &arr)
 	if err != nil {
 		return nil, fmt.Errorf("Error during call C.dial_DHTxx_and_read(): %v", err)
 	}
@@ -86,12 +109,14 @@ func dialDHTxxAndGetResponse(pin int, boostPerfFlag bool) ([]Pulse, error) {
 	return pulses, nil
 }
 
-// TODO write comment to function
-func decodeByte(pulses []Pulse, start int) (byte, error) {
+// decodeByte decode data byte from specific pulse array position.
+func decodeByte(tLow, tHigh0, tHigh1 time.Duration, start int, pulses []Pulse) (byte, error) {
 	if len(pulses)-start < 16 {
 		return 0, fmt.Errorf("Can't decode byte, since range between "+
 			"index and array length is less than 16: %d, %d", start, len(pulses))
 	}
+	HIGH_DUR_MAX := tLow + tHigh1
+	HIGH_LOW_DUR_AVG := ((tLow+tHigh1)/2 + (tLow+tHigh0)/2) / 2
 	var b int = 0
 	for i := 0; i < 8; i++ {
 		pulseL := pulses[start+i*2]
@@ -102,15 +127,15 @@ func decodeByte(pulses []Pulse, start int) (byte, error) {
 		if pulseH.Value == 0 {
 			return 0, fmt.Errorf("High edge value expected at index %d", start+i*2+1)
 		}
-		const HIGH_DUR_MAX = (70 + (70 + 54)) / 2 * time.Microsecond
+		// const HIGH_DUR_MAX = (70 + (70 + 54)) / 2 * time.Microsecond
 		// Calc average value between 24us (bit 0) and 70us (bit 1).
 		// Everything that less than this param is bit 0, bigger - bit 1.
-		const HIGH_DUR_AVG = (24 + (70-24)/2) * time.Microsecond
+		// const HIGH_DUR_AVG = (24 + (70-24)/2) * time.Microsecond
 		if pulseH.Duration > HIGH_DUR_MAX {
 			return 0, fmt.Errorf("High edge value duration %v exceed "+
-				"expected maximum amount %v", pulseH.Duration, HIGH_DUR_MAX)
+				"maximum expected %v", pulseH.Duration, HIGH_DUR_MAX)
 		}
-		if pulseH.Duration > HIGH_DUR_AVG {
+		if pulseH.Duration > HIGH_LOW_DUR_AVG {
 			//fmt.Printf("bit %d is high\n", 7-i)
 			b = b | (1 << uint(7-i))
 		}
@@ -120,43 +145,45 @@ func decodeByte(pulses []Pulse, start int) (byte, error) {
 
 // Decode bunch of pulse read from DHTxx sensors.
 // Use pdf specifications from /docs folder to read 5 bytes and
-// convert them to temperature and humidity.
+// convert them to temperature and humidity with results validation.
 func decodeDHTxxPulses(sensorType SensorType, pulses []Pulse) (temperature float32,
 	humidity float32, err error) {
-	if len(pulses) == 85 {
-		pulses = pulses[3:]
-	} else if len(pulses) == 84 {
-		pulses = pulses[2:]
-	} else if len(pulses) == 83 {
-		pulses = pulses[1:]
-	} else if len(pulses) != 82 {
+	if len(pulses) >= 82 && len(pulses) <= 85 {
+		pulses = pulses[len(pulses)-82:]
+	} else {
 		printPulseArrayForDebug(pulses)
 		return -1, -1, fmt.Errorf("Can't decode pulse array received from "+
 			"DHTxx sensor, since incorrect length: %d", len(pulses))
 	}
 	pulses = pulses[:80]
+	// any bit low signal part
+	tLow := 50 * time.Microsecond
+	// 0 bit high signal part
+	tHigh0 := 27 * time.Microsecond
+	// 1 bit high signal part
+	tHigh1 := 70 * time.Microsecond
 	// Decode 1st byte
-	b0, err := decodeByte(pulses, 0)
+	b0, err := decodeByte(tLow, tHigh0, tHigh1, 0, pulses)
 	if err != nil {
 		return -1, -1, err
 	}
 	// Decode 2nd byte
-	b1, err := decodeByte(pulses, 16)
+	b1, err := decodeByte(tLow, tHigh0, tHigh1, 16, pulses)
 	if err != nil {
 		return -1, -1, err
 	}
 	// Decode 3rd byte
-	b2, err := decodeByte(pulses, 32)
+	b2, err := decodeByte(tLow, tHigh0, tHigh1, 32, pulses)
 	if err != nil {
 		return -1, -1, err
 	}
-	// Decode 4th byte
-	b3, err := decodeByte(pulses, 48)
+	// decode 4th byte
+	b3, err := decodeByte(tLow, tHigh0, tHigh1, 48, pulses)
 	if err != nil {
 		return -1, -1, err
 	}
-	// Decode 5th byte: control sum to verify all data received from sensor
-	sum, err := decodeByte(pulses, 64)
+	// decode 5th byte: control sum to verify all data received from sensor
+	sum, err := decodeByte(tLow, tHigh0, tHigh1, 64, pulses)
 	if err != nil {
 		return -1, -1, err
 	}
@@ -179,6 +206,12 @@ func decodeDHTxxPulses(sensorType SensorType, pulses []Pulse) (temperature float
 	if sensorType == DHT11 {
 		humidity = float32(b0)
 		temperature = float32(b2)
+	} else if sensorType == DHT12 {
+		humidity = float32(b0) + float32(b1)/10.0
+		temperature = float32(b2) + float32(b3)/10.0
+		if b3&0x80 != 0 {
+			temperature *= -1.0
+		}
 	} else if sensorType == DHT22 {
 		humidity = (float32(b0)*256 + float32(b1)) / 10.0
 		temperature = (float32(b2&0x7F)*256 + float32(b3)) / 10.0
@@ -188,6 +221,8 @@ func decodeDHTxxPulses(sensorType SensorType, pulses []Pulse) (temperature float
 	}
 	if humidity > 100.0 {
 		return -1, -1, fmt.Errorf("Humidity value exceed 100%%: %v", humidity)
+	} else if humidity == 0 {
+		return -1, -1, fmt.Errorf("Humidity value cannot be zero")
 	}
 	// Success
 	return temperature, humidity, nil
@@ -215,12 +250,13 @@ func printPulseArrayForDebug(pulses []Pulse) {
 //
 // Return:
 // 1) temperature in Celsius;
-// 2) humidity in percent;
+// 2) relative humidity in percent;
 // 3) error if present.
 func ReadDHTxx(sensorType SensorType, pin int,
 	boostPerfFlag bool) (temperature float32, humidity float32, err error) {
 	// Activate sensor and read data to pulses array
-	pulses, err := dialDHTxxAndGetResponse(pin, boostPerfFlag)
+	handshakeDur := sensorType.GetHandshakeDuration()
+	pulses, err := dialDHTxxAndGetResponse(pin, handshakeDur, boostPerfFlag)
 	if err != nil {
 		return -1, -1, fmt.Errorf("dialDHTxxAndGetResponse: %v", err)
 	}
@@ -247,7 +283,7 @@ func ReadDHTxx(sensorType SensorType, pin int,
 //
 // Return:
 // 1) temperature in Celsius;
-// 2) humidity in percent;
+// 2) relative humidity in percent;
 // 3) number of extra retries data from sensor;
 // 4) error if present.
 func ReadDHTxxWithRetry(sensorType SensorType, pin int, boostPerfFlag bool,
@@ -274,7 +310,7 @@ func ReadDHTxxWithRetry(sensorType SensorType, pin int, boostPerfFlag bool,
 //
 // Return:
 // 1) temperature in Celsius;
-// 2) humidity in percent;
+// 2) relative humidity in percent;
 // 3) number of extra retries data from sensor;
 // 4) error if present.
 func ReadDHTxxWithContextAndRetry(parent context.Context, sensorType SensorType, pin int,
@@ -304,8 +340,8 @@ func ReadDHTxxWithContextAndRetry(parent context.Context, sensorType SensorType,
 				case <-ctx.Done():
 					// Interrupt loop, if pending termination.
 					return -1, -1, retried, ctx.Err()
-				// sleep before new attempt 1.5 sec according to specification
-				case <-time.After(1500 * time.Millisecond):
+				// sleep before new attempt according to specification
+				case <-time.After(sensorType.GetRetryTimeout()):
 					continue
 				}
 			}
@@ -386,7 +422,7 @@ func gpioReadSeqUntilTimeout(p embd.DigitalPin, timeoutMsec int,
 }
 
 // TODO:  Convert all referenced C functions and variables
-func dialDHTxxAndRead(pin int, boostPerfFlag int, arr *[]int) error {
+func dialDHTxxAndRead(pin int, hsDurUsec int, boostPerfFlag int, arr *[]int) error {
 	// TODO:  Transcode function setMaxPriority
 	/*if boostPerfFlag != false; err := setMaxPriority(); err != nil {
 		return -1
