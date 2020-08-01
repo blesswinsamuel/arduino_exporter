@@ -68,19 +68,24 @@ func (dht *DHT) readBits() ([]int, error) {
 
 	// disable garbage collection during critical timing part
 	gcPercent := debug.SetGCPercent(-1)
+	defer func() {
+		// set pin to high so ready for next time
+		err = dht.pin.Out(gpio.High)
+		if err != nil {
+			fmt.Printf("pin out high error: %v", err)
+		}
+	}()
 
 	// send start low
 	err := dht.pin.Out(gpio.Low)
 	if err != nil {
-		dht.pin.Out(gpio.High)
 		return nil, fmt.Errorf("pin out low error: %v", err)
 	}
-	time.Sleep(time.Millisecond)
+	time.Sleep(18 * time.Millisecond)
 
 	// send start high
 	err = dht.pin.In(gpio.PullUp, gpio.NoEdge)
 	if err != nil {
-		dht.pin.Out(gpio.High)
 		return nil, fmt.Errorf("pin in error: %v", err)
 	}
 
@@ -103,12 +108,6 @@ func (dht *DHT) readBits() ([]int, error) {
 
 	// enable garbage collection, done with critical part
 	debug.SetGCPercent(gcPercent)
-
-	// set pin to high so ready for next time
-	err = dht.pin.Out(gpio.High)
-	if err != nil {
-		return nil, fmt.Errorf("pin out high error: %v", err)
-	}
 
 	// get last low reading so know start of data
 	var endNumber int
