@@ -13,6 +13,6 @@ ssh -p "$SSH_PORT" "$HOST" 'bash -ex' <<EOF
 cd ~/dev/rpi_exporter
 
 # /usr/local/go/bin/go build -o rpi_exporter .
-/usr/local/go/bin/go build -o rpi_exporter ./d2r2/
+/usr/local/go/bin/go build -o rpi_exporter ./maintest/
 sudo ./rpi_exporter
 EOF
