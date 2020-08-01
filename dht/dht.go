@@ -51,38 +51,37 @@ func NewDHT(pin gpio.PinIO, temperatureUnit TemperatureUnit, sensorType string) 
 const maxCycles = 16000
 const TIMEOUT = time.Minute
 
+func (dht *DHT) waitLevel(wantLevel gpio.Level) time.Duration {
+	startTime := time.Now()
+	loopCnt := 0
+	for {
+		gotLevel := dht.pin.Read()
+		if gotLevel == wantLevel {
+			break
+		}
+		loopCnt++
+		if loopCnt == maxCycles {
+			return TIMEOUT
+		}
+	}
+	return time.Since(startTime)
+}
+
+// func (dht *DHT) waitLevel(wantLevel gpio.Level) time.Duration {
+// 	startTime := time.Now()
+// 	if dht.pin.WaitForEdge(time.Millisecond) {
+// 		// gotLevel := dht.pin.Read()
+// 		// if gotLevel == wantLevel {
+// 		return time.Since(startTime)
+// 		// }
+// 	}
+// 	return TIMEOUT
+// }
+
 // readBits will get the bits for humidity and temperature
 func (dht *DHT) readBits() ([]int, error) {
 	// create variables ahead of time before critical timing part
 	var err error
-
-	waitLevel := func(wantLevel gpio.Level) time.Duration {
-		startTime := time.Now()
-		loopCnt := 0
-		for {
-			gotLevel := dht.pin.Read()
-			if gotLevel == wantLevel {
-				break
-			}
-			loopCnt++
-			if loopCnt == maxCycles {
-				return TIMEOUT
-			}
-		}
-		return time.Since(startTime)
-	}
-	// waitLevel := func(wantLevel gpio.Level) time.Duration {
-	// 	startTime := time.Now()
-	// 	for {
-	// 		if dht.pin.WaitForEdge(-1) {
-	// 			gotLevel := dht.pin.Read()
-	// 			if gotLevel == wantLevel {
-	// 				return time.Since(startTime)
-	// 			}
-	// 		}
-	// 	}
-	// 	return TIMEOUT
-	// }
 
 	fmt.Println("waiting 2 secs")
 	{
@@ -129,29 +128,30 @@ func (dht *DHT) readBits() ([]int, error) {
 			return nil, fmt.Errorf("pin out high error: %v", err)
 		}
 		// Delay a moment to let sensor pull data line low.
-		time.Sleep(5 * time.Microsecond)
+		// time.Sleep(5 * time.Microsecond)
 		// time.Sleep(40 * time.Microsecond)
 	}
 
 	// get data from sensor
 	{
-		err = dht.pin.In(gpio.PullUp, gpio.NoEdge)
+		err = dht.pin.In(gpio.PullUp, gpio.BothEdges)
 		if err != nil {
 			return nil, fmt.Errorf("pin in error: %v", err)
 		}
+		time.Sleep(5 * time.Microsecond)
 
-		initCycles[0] = waitLevel(gpio.Low)
-		initCycles[1] = waitLevel(gpio.High) // 54us
-		initCycles[2] = waitLevel(gpio.Low)  // 80us
-		// initCycles[0] = waitLevel(gpio.Low)
-		// initCycles[1] = waitLevel(gpio.High)
+		initCycles[0] = dht.waitLevel(gpio.Low)
+		initCycles[1] = dht.waitLevel(gpio.High) // 54us
+		initCycles[2] = dht.waitLevel(gpio.Low)  // 80us
+		// initCycles[0] = dht.waitLevel(gpio.Low)
+		// initCycles[1] = dht.waitLevel(gpio.High)
 		for i := 0; i < 80; i += 2 {
-			cycles[i] = waitLevel(gpio.High)  // 50us
-			cycles[i+1] = waitLevel(gpio.Low) // 26-28us or 70us
-			// cycles[i] = waitLevel(gpio.Low)
-			// cycles[i+1] = waitLevel(gpio.High)
+			cycles[i] = dht.waitLevel(gpio.High)  // 50us
+			cycles[i+1] = dht.waitLevel(gpio.Low) // 26-28us or 70us
+			// cycles[i] = dht.waitLevel(gpio.Low)
+			// cycles[i+1] = dht.waitLevel(gpio.High)
 		}
-		initCycles[3] = waitLevel(gpio.High) // 54us
+		initCycles[3] = dht.waitLevel(gpio.High) // 54us
 	}
 
 	fmt.Println(initCycles)

@@ -11,7 +11,7 @@ export GOARCH=arm
 go build -o /tmp/rpi_exporter ./maintest/
 
 ssh -p "$SSH_PORT" "$HOST" 'bash -ex' <<EOF
-# sudo killall -9 rpi_exporter
+sudo killall -9 rpi_exporter || true
 EOF
 scp -P "$SSH_PORT" /tmp/rpi_exporter $HOST:/tmp/rpi_exporter
 ssh -p "$SSH_PORT" "$HOST" 'bash -ex' <<EOF
