@@ -126,22 +126,22 @@ func (dht *DHT) readBits() ([]int, error) {
 		time.Sleep(18 * time.Millisecond) // data sheet says at least 18ms, 20ms just to be safe
 
 		// End the start signal by setting data line high for 40 microseconds.
-		err = dht.pin.Out(gpio.High)
-		// err = dht.pin.In(gpio.PullUp, gpio.BothEdges)
+		// err = dht.pin.Out(gpio.High)
+		err = dht.pin.In(gpio.PullUp, gpio.NoEdge)
 		if err != nil {
 			return nil, fmt.Errorf("pin out high error: %v", err)
 		}
 		// Delay a moment to let sensor pull data line low.
 		// time.Sleep(5 * time.Microsecond)
-		time.Sleep(40 * time.Microsecond)
+		// time.Sleep(40 * time.Microsecond)
 	}
 
 	// get data from sensor
 	{
-		err = dht.pin.In(gpio.PullUp, gpio.BothEdges)
-		if err != nil {
-			return nil, fmt.Errorf("pin in error: %v", err)
-		}
+		// err = dht.pin.In(gpio.PullUp, gpio.NoEdge)
+		// if err != nil {
+		// 	return nil, fmt.Errorf("pin in error: %v", err)
+		// }
 
 		initCycles[0] = dht.waitLevel(gpio.Low)
 		initCycles[1] = dht.waitLevel(gpio.High) // 54us
