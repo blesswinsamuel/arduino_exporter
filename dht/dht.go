@@ -26,12 +26,17 @@ type DHT struct {
 	pin             gpio.PinIO
 	temperatureUnit TemperatureUnit
 	sensorType      string
+	lastRead        time.Time
 }
 
 // NewDHT to create a new DHT struct.
 // sensorType is dht11 for DHT11, anything else for AM2302 / DHT22.
 func NewDHT(pin gpio.PinIO, temperatureUnit TemperatureUnit, sensorType string) (*DHT, error) {
-	dht := &DHT{temperatureUnit: temperatureUnit, pin: pin}
+	dht := &DHT{
+		temperatureUnit: temperatureUnit,
+		pin:             pin,
+		lastRead:        time.Now().Add(-1 * time.Second),
+	}
 
 	// set sensorType
 	sensorType = strings.ToLower(sensorType)
@@ -55,12 +60,11 @@ func (dht *DHT) waitLevel(wantLevel gpio.Level) time.Duration {
 	startTime := time.Now()
 	loopCnt := 0
 	for {
-		gotLevel := dht.pin.Read()
-		if gotLevel == wantLevel {
+		if dht.pin.Read() == wantLevel {
 			break
 		}
 		loopCnt++
-		if loopCnt == maxCycles {
+		if loopCnt >= maxCycles {
 			return TIMEOUT
 		}
 	}
@@ -83,21 +87,20 @@ func (dht *DHT) readBits() ([]int, error) {
 	// create variables ahead of time before critical timing part
 	var err error
 
-	fmt.Println("waiting 2 secs")
-	{
-		// Go into high impedence state to let pull-up raise data line level and
-		// start the reading process.
-		err = dht.pin.Out(gpio.High)
-		if err != nil {
-			return nil, fmt.Errorf("pin out high error: %v", err)
-		}
-		time.Sleep(2 * time.Second)
-		// err = dht.pin.In(gpio.PullUp, gpio.NoEdge)
-		// if err != nil {
-		// 	return nil, fmt.Errorf("pin out high error: %v", err)
-		// }
-	}
-	fmt.Println("starting")
+	// {
+	// 	// Go into high impedence state to let pull-up raise data line level and
+	// 	// start the reading process.
+	// 	err = dht.pin.Out(gpio.High)
+	// 	// err = dht.pin.In(gpio.PullUp, gpio.NoEdge)
+	// 	if err != nil {
+	// 		return nil, fmt.Errorf("pin out high error: %v", err)
+	// 	}
+	// 	time.Sleep(time.Millisecond)
+	// 	// err = dht.pin.In(gpio.PullUp, gpio.NoEdge)
+	// 	// if err != nil {
+	// 	// 	return nil, fmt.Errorf("pin out high error: %v", err)
+	// 	// }
+	// }
 
 	defer func() {
 		// release the bus
@@ -120,16 +123,17 @@ func (dht *DHT) readBits() ([]int, error) {
 		if err != nil {
 			return nil, fmt.Errorf("pin out low error: %v", err)
 		}
-		time.Sleep(19 * time.Millisecond) // data sheet says at least 18ms, 20ms just to be safe
+		time.Sleep(18 * time.Millisecond) // data sheet says at least 18ms, 20ms just to be safe
 
 		// End the start signal by setting data line high for 40 microseconds.
 		err = dht.pin.Out(gpio.High)
+		// err = dht.pin.In(gpio.PullUp, gpio.BothEdges)
 		if err != nil {
 			return nil, fmt.Errorf("pin out high error: %v", err)
 		}
 		// Delay a moment to let sensor pull data line low.
 		// time.Sleep(5 * time.Microsecond)
-		// time.Sleep(40 * time.Microsecond)
+		time.Sleep(40 * time.Microsecond)
 	}
 
 	// get data from sensor
@@ -138,7 +142,6 @@ func (dht *DHT) readBits() ([]int, error) {
 		if err != nil {
 			return nil, fmt.Errorf("pin in error: %v", err)
 		}
-		time.Sleep(5 * time.Microsecond)
 
 		initCycles[0] = dht.waitLevel(gpio.Low)
 		initCycles[1] = dht.waitLevel(gpio.High) // 54us
@@ -235,18 +238,14 @@ func (dht *DHT) bitsToValues(data []int) (humidity float64, temperature float64,
 // Note that Read will sleep for at least 2 seconds between last call.
 // Each reads error adds a half second to sleep time to max of 30 seconds.
 func (dht *DHT) Read() (humidity float64, temperature float64, err error) {
-	// // set sleepTime
-	// var sleepTime time.Duration
-	// if dht.numErrors < 57 {
-	// 	sleepTime = (2 * time.Second) + (time.Duration(dht.numErrors) * 500 * time.Millisecond)
-	// } else {
-	// 	// sleep max of 30 seconds
-	// 	sleepTime = 30 * time.Second
-	// }
-	// sleepTime -= time.Since(dht.lastRead)
+	// set sleepTime
+	sleepTime := 2 * time.Second
+	sleepTime -= time.Since(dht.lastRead)
 
-	// // sleep between 2 and 30 seconds
-	// time.Sleep(sleepTime)
+	// sleep between 2 and 30 seconds
+	time.Sleep(sleepTime)
+
+	dht.lastRead = time.Now()
 
 	// read bits from sensor
 	var bits []int
