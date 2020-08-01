@@ -8,7 +8,8 @@ HOST="$SSH_USER@$SSH_HOST"
 
 export GOOS=linux
 export GOARCH=arm
-go build -o /tmp/rpi_exporter ./maintest/
+# go build -o /tmp/rpi_exporter ./maintest/
+go build -o /tmp/rpi_exporter .
 
 ssh -p "$SSH_PORT" "$HOST" 'bash -ex' <<EOF
 sudo killall -9 rpi_exporter || true

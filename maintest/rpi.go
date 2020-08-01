@@ -2,11 +2,11 @@ package main
 
 import (
 	"fmt"
-	"log"
 
 	// "github.com/blesswinsamuel/rpi_exporter/d2r2/dht"
 
 	"github.com/blesswinsamuel/rpi_exporter/dht"
+	"github.com/prometheus/common/log"
 	"periph.io/x/periph/host"
 	"periph.io/x/periph/host/rpi"
 )
@@ -17,6 +17,7 @@ func main() {
 	// if err != nil {
 	// 	log.Fatal(err)
 	// }
+	log.Base().SetLevel("debug")
 	if _, err := host.Init(); err != nil {
 		log.Fatal(err)
 	}

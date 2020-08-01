@@ -2,8 +2,8 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/blesswinsamuel/rpi_exporter/dht"
 
@@ -11,15 +11,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/log"
 
-	"golang.org/x/sync/errgroup"
-
 	"periph.io/x/periph/host"
 	"periph.io/x/periph/host/rpi"
 )
 
 var (
 	listen = flag.String("listen",
-		"localhost:9153",
+		"localhost:9101",
 		"listen address")
 	metricsPath = flag.String("metrics_path",
 		"/metrics",
@@ -27,19 +25,34 @@ var (
 )
 
 var (
-	temperatureMetric = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "temperature",
+	dhtTemperatureMetric = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "pi_dht_temperature",
 		Help: "Temperature from DHT sensor",
 	})
-	humidityMetric = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "humidity",
+	dhtHumidityMetric = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "pi_dht_humidity",
 		Help: "Humidity from DHT sensor",
+	})
+	dhtRetriesMetric = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "pi_dht_retries",
+		Help: "Retries from DHT sensor",
+	})
+	dhtFailuresMetric = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "pi_dht_failed",
+		Help: "Failures from DHT sensor",
+	})
+	dhtReadingsCountMetric = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "pi_dht_readings",
+		Help: "Successful readings from DHT sensor",
 	})
 )
 
 func init() {
-	prometheus.MustRegister(temperatureMetric)
-	prometheus.MustRegister(humidityMetric)
+	prometheus.MustRegister(dhtTemperatureMetric)
+	prometheus.MustRegister(dhtHumidityMetric)
+	prometheus.MustRegister(dhtRetriesMetric)
+	prometheus.MustRegister(dhtFailuresMetric)
+	prometheus.MustRegister(dhtReadingsCountMetric)
 }
 
 type server struct {
@@ -47,24 +60,23 @@ type server struct {
 	dht         *dht.DHT
 }
 
-func (s *server) metrics(w http.ResponseWriter, r *http.Request) {
-	var eg errgroup.Group
-
-	eg.Go(func() error {
-		temperature, humidity, err := s.dht.ReadRetry(11)
+func (s *server) calcTemperatureInBackground() {
+	for {
+		humidity, temperature, retries, err := s.dht.ReadRetry(11)
 		if err != nil {
-			return fmt.Errorf("failed to read temperature: %v", err)
+			dhtFailuresMetric.Add(1)
+			log.Errorf("failed to read temperature: %v", err)
+			continue
 		}
-		temperatureMetric.Set(temperature)
-		humidityMetric.Set(humidity)
-		return nil
-	})
-
-	if err := eg.Wait(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		dhtReadingsCountMetric.Inc()
+		dhtTemperatureMetric.Set(temperature)
+		dhtHumidityMetric.Set(humidity)
+		dhtRetriesMetric.Add(float64(retries))
+		time.Sleep(5 * time.Second)
 	}
+}
 
+func (s *server) metrics(w http.ResponseWriter, r *http.Request) {
 	s.promHandler.ServeHTTP(w, r)
 }
 
@@ -81,6 +93,8 @@ func main() {
 		promHandler: promhttp.Handler(),
 		dht:         dht,
 	}
+	go s.calcTemperatureInBackground()
+
 	http.HandleFunc(*metricsPath, s.metrics)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<html>

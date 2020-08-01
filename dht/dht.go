@@ -174,12 +174,12 @@ func (dht *DHT) readBits() ([]int, error) {
 func (dht *DHT) bitsToValues(data []int) (humidity float64, temperature float64, err error) {
 	var sumTotal int = 0
 	for i, b := range data[0:4] {
-		log.Debug("%3X\t%3d\t<- %d\n", b, b, i)
+		log.Debugf("%3X - %3d <- %d", b, b, i)
 		sumTotal += b
 	}
-	log.Debugf("%3X\t%3d\t<- Checksum\n", data[4], data[4])
+	log.Debugf("%3X - %3d <- Checksum", data[4], data[4])
 	log.Debug(data)
-	log.Debugf("%3X\t%3d\t<- Calculated checksum\n", sumTotal, sumTotal)
+	log.Debugf("%3X - %3d <- Calculated checksum", sumTotal, sumTotal)
 
 	checkSum := data[4]
 	// check checkSum
@@ -244,7 +244,7 @@ func (dht *DHT) ReadRetry(maxRetries int) (humidity float64, temperature float64
 		if err == nil {
 			return
 		}
-		log.Warnf("Error: %v", err)
+		log.Debugf("Error: %v", err)
 	}
 	return
 }
