@@ -7,7 +7,8 @@ import (
 	"time"
 
 	"periph.io/x/periph/conn/gpio"
-	"periph.io/x/periph/host"
+
+	"github.com/prometheus/common/log"
 )
 
 // TemperatureUnit is the temperature unit wanted, either Celsius or Fahrenheit
@@ -54,7 +55,7 @@ func NewDHT(pin gpio.PinIO, temperatureUnit TemperatureUnit, sensorType string) 
 }
 
 const maxCycles = 16000
-const TIMEOUT = time.Minute
+const timeout = time.Minute
 
 func (dht *DHT) waitLevel(wantLevel gpio.Level) time.Duration {
 	startTime := time.Now()
@@ -65,48 +66,22 @@ func (dht *DHT) waitLevel(wantLevel gpio.Level) time.Duration {
 		}
 		loopCnt++
 		if loopCnt >= maxCycles {
-			return TIMEOUT
+			return timeout
 		}
 	}
 	return time.Since(startTime)
 }
-
-// func (dht *DHT) waitLevel(wantLevel gpio.Level) time.Duration {
-// 	startTime := time.Now()
-// 	if dht.pin.WaitForEdge(time.Millisecond) {
-// 		// gotLevel := dht.pin.Read()
-// 		// if gotLevel == wantLevel {
-// 		return time.Since(startTime)
-// 		// }
-// 	}
-// 	return TIMEOUT
-// }
 
 // readBits will get the bits for humidity and temperature
 func (dht *DHT) readBits() ([]int, error) {
 	// create variables ahead of time before critical timing part
 	var err error
 
-	// {
-	// 	// Go into high impedence state to let pull-up raise data line level and
-	// 	// start the reading process.
-	// 	err = dht.pin.Out(gpio.High)
-	// 	// err = dht.pin.In(gpio.PullUp, gpio.NoEdge)
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("pin out high error: %v", err)
-	// 	}
-	// 	time.Sleep(time.Millisecond)
-	// 	// err = dht.pin.In(gpio.PullUp, gpio.NoEdge)
-	// 	// if err != nil {
-	// 	// 	return nil, fmt.Errorf("pin out high error: %v", err)
-	// 	// }
-	// }
-
 	defer func() {
 		// release the bus
 		// set pin to high so ready for next time
 		if err := dht.pin.Out(gpio.High); err != nil {
-			fmt.Printf("pin out high error: %v", err)
+			log.Errorf("pin out high error: %v", err)
 		}
 	}()
 
@@ -157,8 +132,8 @@ func (dht *DHT) readBits() ([]int, error) {
 		initCycles[3] = dht.waitLevel(gpio.High) // 54us
 	}
 
-	fmt.Println(initCycles)
-	fmt.Println(cycles)
+	log.Debugln(initCycles)
+	log.Debugln(cycles)
 
 	// enable garbage collection, done with critical part
 	debug.SetGCPercent(gcPercent)
@@ -168,26 +143,26 @@ func (dht *DHT) readBits() ([]int, error) {
 		lowDur := cycles[2*i]
 		highDur := cycles[2*i+1]
 
-		if lowDur == TIMEOUT || highDur == TIMEOUT {
-			fmt.Println("Timeout", i)
+		if lowDur == timeout || highDur == timeout {
+			log.Debugf("Timeout: %v", i)
 			// 	return nil, errors.New("Timeout")
 		}
 		if !(lowDur >= 40*time.Microsecond && lowDur <= 60*time.Microsecond) {
-			fmt.Printf("%2d: low duration is not around 50us (%s)\n", i, lowDur)
+			log.Debugf("%2d: low duration is not around 50us (%s)", i, lowDur)
 		}
 
 		data[i/8] <<= 1
 		// Now compare the low and high cycle times to see if the bit is a 0 or 1.
 		if highDur > lowDur {
 			if !(highDur >= 65*time.Microsecond && highDur <= 90*time.Microsecond) {
-				fmt.Printf("%2d: high duration (1) is not around 79us (%s)\n", i, highDur)
+				log.Debugf("%2d: high duration (1) is not around 79us (%s)", i, highDur)
 			}
 
 			// High cycles are greater than 50us low cycle count, must be a 1.
 			data[i/8] |= 1
 		} else {
 			if !(highDur >= 20*time.Microsecond && highDur <= 30*time.Microsecond) {
-				fmt.Printf("%2d: high duration (0) is not around 25us (%s)\n", i, highDur)
+				log.Debugf("%2d: high duration (0) is not around 25us (%s)", i, highDur)
 			}
 		}
 	}
@@ -199,12 +174,12 @@ func (dht *DHT) readBits() ([]int, error) {
 func (dht *DHT) bitsToValues(data []int) (humidity float64, temperature float64, err error) {
 	var sumTotal int = 0
 	for i, b := range data[0:4] {
-		fmt.Printf("%3X\t%3d\t<- %d\n", b, b, i)
+		log.Debug("%3X\t%3d\t<- %d\n", b, b, i)
 		sumTotal += b
 	}
-	fmt.Printf("%3X\t%3d\t<- Checksum\n", data[4], data[4])
-	fmt.Println(data)
-	fmt.Printf("%3X\t%3d\t<- Calculated checksum\n", sumTotal, sumTotal)
+	log.Debugf("%3X\t%3d\t<- Checksum\n", data[4], data[4])
+	log.Debug(data)
+	log.Debugf("%3X\t%3d\t<- Calculated checksum\n", sumTotal, sumTotal)
 
 	checkSum := data[4]
 	// check checkSum
@@ -262,13 +237,14 @@ func (dht *DHT) Read() (humidity float64, temperature float64, err error) {
 
 // ReadRetry will call Read until there is no errors or the maxRetries is hit.
 // Suggest maxRetries to be set around 11.
-func (dht *DHT) ReadRetry(maxRetries int) (humidity float64, temperature float64, err error) {
+func (dht *DHT) ReadRetry(maxRetries int) (humidity float64, temperature float64, retries int, err error) {
 	for i := 0; i < maxRetries; i++ {
+		retries = i
 		humidity, temperature, err = dht.Read()
 		if err == nil {
 			return
 		}
-		fmt.Println("Warning - error: %v", err)
+		log.Warnf("Error: %v", err)
 	}
 	return
 }
@@ -310,28 +286,4 @@ Loop:
 	}
 
 	close(stopped)
-}
-
-// HostInit calls periph.io host.Init(). This needs to be done before DHT can be used.
-func HostInit() error {
-	state, err := host.Init()
-	// Prints the loaded driver.
-	fmt.Printf("Using drivers:\n")
-	for _, driver := range state.Loaded {
-		fmt.Printf("- %s\n", driver)
-	}
-
-	// Prints the driver that were skipped as irrelevant on the platform.
-	fmt.Printf("Drivers skipped:\n")
-	for _, failure := range state.Skipped {
-		fmt.Printf("- %s: %s\n", failure.D, failure.Err)
-	}
-
-	// Having drivers failing to load may not require process termination. It
-	// is possible to continue to run in partial failure mode.
-	fmt.Printf("Drivers failed to load:\n")
-	for _, failure := range state.Failed {
-		fmt.Printf("- %s: %v\n", failure.D, failure.Err)
-	}
-	return err
 }

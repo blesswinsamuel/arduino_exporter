@@ -7,6 +7,7 @@ import (
 	// "github.com/blesswinsamuel/rpi_exporter/d2r2/dht"
 
 	"github.com/blesswinsamuel/rpi_exporter/dht"
+	"periph.io/x/periph/host"
 	"periph.io/x/periph/host/rpi"
 )
 
@@ -16,14 +17,14 @@ func main() {
 	// if err != nil {
 	// 	log.Fatal(err)
 	// }
-	if err := dht.HostInit(); err != nil {
+	if _, err := host.Init(); err != nil {
 		log.Fatal(err)
 	}
 	d, err := dht.NewDHT(rpi.P1_7, dht.Celsius, "dht11")
 	if err != nil {
 		log.Fatal(err)
 	}
-	humidity, temperature, err := d.ReadRetry(11)
+	humidity, temperature, retries, err := d.ReadRetry(11)
 	if err != nil {
 		fmt.Println("Read error:", err)
 		return
@@ -31,6 +32,7 @@ func main() {
 
 	fmt.Printf("humidity: %v\n", humidity)
 	fmt.Printf("temperature: %v\n", temperature)
+	fmt.Printf("retries: %v\n", retries)
 
 	// temperature, humidity, retried, err :=
 	// 	dht.ReadDHTxxWithRetry(dht.DHT11, rpi.P1_7, false, 10)

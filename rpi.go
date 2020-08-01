@@ -5,11 +5,16 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/MichaelS11/go-dht"
+	"github.com/blesswinsamuel/rpi_exporter/dht"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/log"
+
 	"golang.org/x/sync/errgroup"
+
+	"periph.io/x/periph/host"
+	"periph.io/x/periph/host/rpi"
 )
 
 var (
@@ -65,19 +70,13 @@ func (s *server) metrics(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	flag.Parse()
-	err := dht.HostInit()
-	if err != nil {
+	if _, err := host.Init(); err != nil {
 		log.Fatal("HostInit error:", err)
 	}
-	dht, err := dht.NewDHT("P1_7", dht.Celsius, "dht11")
+	dht, err := dht.NewDHT(rpi.P1_7, dht.Celsius, "dht11")
 	if err != nil {
 		log.Fatal("NewDHT error:", err)
 	}
-	temperature, humidity, err := dht.ReadRetry(6)
-	if err != nil {
-		log.Fatalf("failed to read temperature: %v", err)
-	}
-	log.Infof("Temperature = %v*C, Humidity = %v%%\n", temperature, humidity)
 	s := &server{
 		promHandler: promhttp.Handler(),
 		dht:         dht,
