@@ -26,8 +26,6 @@ type DHT struct {
 	pin             gpio.PinIO
 	temperatureUnit TemperatureUnit
 	sensorType      string
-	numErrors       int
-	lastRead        time.Time
 }
 
 // NewDHT to create a new DHT struct.
@@ -47,13 +45,10 @@ func NewDHT(pin gpio.PinIO, temperatureUnit TemperatureUnit, sensorType string) 
 		return nil, fmt.Errorf("pin out high error: %v", err)
 	}
 
-	// set lastRead a second before to give the pin a second to warm up
-	dht.lastRead = time.Now().Add(-1 * time.Second)
-
 	return dht, nil
 }
 
-const maxCycles = 1000
+const maxCycles = 16000
 const TIMEOUT = time.Minute
 
 // readBits will get the bits for humidity and temperature
@@ -63,16 +58,16 @@ func (dht *DHT) readBits() ([]int, error) {
 
 	waitLevel := func(wantLevel gpio.Level) time.Duration {
 		startTime := time.Now()
-		// loopCnt := 0
+		loopCnt := 0
 		for {
 			gotLevel := dht.pin.Read()
 			if gotLevel == wantLevel {
 				break
 			}
-			// loopCnt++
-			// if loopCnt == maxCycles {
-			// 	return TIMEOUT
-			// }
+			loopCnt++
+			if loopCnt == maxCycles {
+				return TIMEOUT
+			}
 		}
 		return time.Since(startTime)
 	}
@@ -89,11 +84,21 @@ func (dht *DHT) readBits() ([]int, error) {
 	// 	return TIMEOUT
 	// }
 
-	// set lastRead so do not read more than once every 2 seconds
-	dht.lastRead = time.Now()
-
-	// disable garbage collection during critical timing part
-	gcPercent := debug.SetGCPercent(-1)
+	fmt.Println("waiting 2 secs")
+	{
+		// Go into high impedence state to let pull-up raise data line level and
+		// start the reading process.
+		err = dht.pin.Out(gpio.High)
+		if err != nil {
+			return nil, fmt.Errorf("pin out high error: %v", err)
+		}
+		time.Sleep(2 * time.Second)
+		// err = dht.pin.In(gpio.PullUp, gpio.NoEdge)
+		// if err != nil {
+		// 	return nil, fmt.Errorf("pin out high error: %v", err)
+		// }
+	}
+	fmt.Println("starting")
 
 	defer func() {
 		// release the bus
@@ -103,19 +108,11 @@ func (dht *DHT) readBits() ([]int, error) {
 		}
 	}()
 
-	// {
-	// 	// Go into high impedence state to let pull-up raise data line level and
-	// 	// start the reading process.
-	// 	err = dht.pin.Out(gpio.High)
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("pin out high error: %v", err)
-	// 	}
-	// 	time.Sleep(time.Millisecond)
-	// 	// err = dht.pin.In(gpio.PullUp, gpio.NoEdge)
-	// 	// if err != nil {
-	// 	// 	return nil, fmt.Errorf("pin out high error: %v", err)
-	// 	// }
-	// }
+	var initCycles []time.Duration = make([]time.Duration, 4)
+	var cycles []time.Duration = make([]time.Duration, 80)
+
+	// disable garbage collection during critical timing part
+	gcPercent := debug.SetGCPercent(-1)
 
 	// send start signal
 	{
@@ -124,7 +121,7 @@ func (dht *DHT) readBits() ([]int, error) {
 		if err != nil {
 			return nil, fmt.Errorf("pin out low error: %v", err)
 		}
-		time.Sleep(20 * time.Millisecond) // data sheet says at least 18ms, 20ms just to be safe
+		time.Sleep(19 * time.Millisecond) // data sheet says at least 18ms, 20ms just to be safe
 
 		// End the start signal by setting data line high for 40 microseconds.
 		err = dht.pin.Out(gpio.High)
@@ -132,14 +129,13 @@ func (dht *DHT) readBits() ([]int, error) {
 			return nil, fmt.Errorf("pin out high error: %v", err)
 		}
 		// Delay a moment to let sensor pull data line low.
-		time.Sleep(40 * time.Microsecond)
+		time.Sleep(5 * time.Microsecond)
+		// time.Sleep(40 * time.Microsecond)
 	}
 
 	// get data from sensor
-	var initCycles []time.Duration = make([]time.Duration, 4)
-	var cycles []time.Duration = make([]time.Duration, 80)
 	{
-		err = dht.pin.In(gpio.PullUp, gpio.BothEdges)
+		err = dht.pin.In(gpio.PullUp, gpio.NoEdge)
 		if err != nil {
 			return nil, fmt.Errorf("pin in error: %v", err)
 		}
@@ -150,8 +146,8 @@ func (dht *DHT) readBits() ([]int, error) {
 		// initCycles[0] = waitLevel(gpio.Low)
 		// initCycles[1] = waitLevel(gpio.High)
 		for i := 0; i < 80; i += 2 {
-			cycles[i] = waitLevel(gpio.High)  // 54us
-			cycles[i+1] = waitLevel(gpio.Low) // 24us or 70us
+			cycles[i] = waitLevel(gpio.High)  // 50us
+			cycles[i+1] = waitLevel(gpio.Low) // 26-28us or 70us
 			// cycles[i] = waitLevel(gpio.Low)
 			// cycles[i+1] = waitLevel(gpio.High)
 		}
@@ -174,21 +170,21 @@ func (dht *DHT) readBits() ([]int, error) {
 			// 	return nil, errors.New("Timeout")
 		}
 		if !(lowDur >= 40*time.Microsecond && lowDur <= 60*time.Microsecond) {
-			fmt.Printf("low duration is not around 50us (%s)\n", lowDur)
+			fmt.Printf("%2d: low duration is not around 50us (%s)\n", i, lowDur)
 		}
 
 		data[i/8] <<= 1
 		// Now compare the low and high cycle times to see if the bit is a 0 or 1.
 		if highDur > lowDur {
-			if !(highDur >= 70*time.Microsecond && highDur <= 90*time.Microsecond) {
-				fmt.Printf("high duration (1) is not around 79us (%s)\n", highDur)
+			if !(highDur >= 65*time.Microsecond && highDur <= 90*time.Microsecond) {
+				fmt.Printf("%2d: high duration (1) is not around 79us (%s)\n", i, highDur)
 			}
 
 			// High cycles are greater than 50us low cycle count, must be a 1.
 			data[i/8] |= 1
 		} else {
 			if !(highDur >= 20*time.Microsecond && highDur <= 30*time.Microsecond) {
-				fmt.Printf("high duration (0) is not around 25us (%s)\n", highDur)
+				fmt.Printf("%2d: high duration (0) is not around 25us (%s)\n", i, highDur)
 			}
 		}
 	}

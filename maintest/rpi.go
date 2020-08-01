@@ -40,4 +40,13 @@ func main() {
 	// // Print temperature and humidity
 	// fmt.Printf("Temperature = %v*C, Humidity = %v%% (retried %d times)\n",
 	// 	temperature, humidity, retried)
+
+	// t := time.NewTicker(500 * time.Millisecond)
+	// for l := gpio.Low; ; l = !l {
+	// 	// Lookup a pin by its location on the board:
+	// 	if err := rpi.P1_7.Out(l); err != nil {
+	// 		log.Fatal(err)
+	// 	}
+	// 	<-t.C
+	// }
 }
