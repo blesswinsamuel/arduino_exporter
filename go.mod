@@ -14,5 +14,5 @@ require (
 	github.com/prometheus/client_golang v0.9.4
 	github.com/prometheus/common v0.4.1
 	golang.org/x/sync v0.0.0-20190423024810-112230192c58
-	periph.io/x/periph v3.6.4+incompatible // indirect
+	periph.io/x/periph v3.6.4+incompatible
 )

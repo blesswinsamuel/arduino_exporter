@@ -11,8 +11,9 @@ import (
 	"github.com/d2r2/go-shell"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/gavv/monotime"
-	"github.com/kidoman/embd"
-	_ "github.com/kidoman/embd/host/rpi"
+
+	"periph.io/x/periph/conn/gpio"
+	"periph.io/x/periph/host"
 	//"unsafe"
 	//"reflect"
 )
@@ -66,14 +67,12 @@ const (
 
 // Pulse keep pulse signal state with how long it lasted.
 type Pulse struct {
-	Value    byte
+	Value    gpio.Level
 	Duration time.Duration
 }
 
 // Activate sensor and get back bunch of pulses for further decoding.
-func dialDHTxxAndGetResponse(pin int, handshakeDur time.Duration, boostPerfFlag bool) ([]Pulse, error) {
-	var arr []int
-	var hsDurUsec int = int(handshakeDur / time.Microsecond)
+func dialDHTxxAndGetResponse(pin gpio.PinIO, handshakeDur time.Duration, boostPerfFlag bool) ([]Pulse, error) {
 	//var list []int
 	var boost int = 0
 	if boostPerfFlag {
@@ -81,30 +80,9 @@ func dialDHTxxAndGetResponse(pin int, handshakeDur time.Duration, boostPerfFlag 
 	}
 
 	// return array: [pulse, duration, pulse, duration, ...]
-	err := dialDHTxxAndRead(int(pin), hsDurUsec, boost, &arr)
+	pulses, err := dialDHTxxAndRead(pin, handshakeDur, boost)
 	if err != nil {
-		return nil, fmt.Errorf("Error during call C.dial_DHTxx_and_read(): %v", err)
-	}
-	//defer C.free(unsafe.Pointer(arr))
-	// Convert original C array arr to Go slice list
-	//h := (*reflect.SliceHeader)(unsafe.Pointer(&list))
-	//h.Data = uintptr(unsafe.Pointer(arr))
-	//h.Len = int(arrLen)
-	//h.Cap = int(arrLen)
-	//pulses := make([]Pulse, len(list)/2)
-	pulses := make([]Pulse, len(arr)/2)
-	// Convert original int array ([pulse, duration, pulse, duration, ...])
-	// to Pulse struct array
-	//for i := 0; i < len(list)/2; i++ {
-	for i := 0; i < len(arr)/2; i++ {
-		var value byte = 0
-		//if list[i*2] != 0 {
-		if arr[i*2] != 0 {
-			value = 1
-		}
-		pulses[i] = Pulse{Value: value,
-			//Duration: time.Duration(list[i*2+1]) * time.Microsecond}
-			Duration: time.Duration(arr[i*2+1]) * time.Microsecond}
+		return nil, fmt.Errorf("Error during call dialDHTxxAndRead: %v", err)
 	}
 	return pulses, nil
 }
@@ -121,10 +99,10 @@ func decodeByte(tLow, tHigh0, tHigh1 time.Duration, start int, pulses []Pulse) (
 	for i := 0; i < 8; i++ {
 		pulseL := pulses[start+i*2]
 		pulseH := pulses[start+i*2+1]
-		if pulseL.Value != 0 {
+		if pulseL.Value != gpio.Low {
 			return 0, fmt.Errorf("Low edge value expected at index %d", start+i*2)
 		}
-		if pulseH.Value == 0 {
+		if pulseH.Value != gpio.High {
 			return 0, fmt.Errorf("High edge value expected at index %d", start+i*2+1)
 		}
 		// const HIGH_DUR_MAX = (70 + (70 + 54)) / 2 * time.Microsecond
@@ -252,7 +230,7 @@ func printPulseArrayForDebug(pulses []Pulse) {
 // 1) temperature in Celsius;
 // 2) relative humidity in percent;
 // 3) error if present.
-func ReadDHTxx(sensorType SensorType, pin int,
+func ReadDHTxx(sensorType SensorType, pin gpio.PinIO,
 	boostPerfFlag bool) (temperature float32, humidity float32, err error) {
 	// Activate sensor and read data to pulses array
 	handshakeDur := sensorType.GetHandshakeDuration()
@@ -286,7 +264,7 @@ func ReadDHTxx(sensorType SensorType, pin int,
 // 2) relative humidity in percent;
 // 3) number of extra retries data from sensor;
 // 4) error if present.
-func ReadDHTxxWithRetry(sensorType SensorType, pin int, boostPerfFlag bool,
+func ReadDHTxxWithRetry(sensorType SensorType, pin gpio.PinIO, boostPerfFlag bool,
 	retry int) (temperature float32, humidity float32, retried int, err error) {
 	// Create default context
 	ctx := context.Background()
@@ -313,7 +291,7 @@ func ReadDHTxxWithRetry(sensorType SensorType, pin int, boostPerfFlag bool,
 // 2) relative humidity in percent;
 // 3) number of extra retries data from sensor;
 // 4) error if present.
-func ReadDHTxxWithContextAndRetry(parent context.Context, sensorType SensorType, pin int,
+func ReadDHTxxWithContextAndRetry(parent context.Context, sensorType SensorType, pin gpio.PinIO,
 	boostPerfFlag bool, retry int) (temperature float32, humidity float32, retried int, err error) {
 	// create context with cancellation possibility
 	ctx, cancel := context.WithCancel(parent)
@@ -351,37 +329,22 @@ func ReadDHTxxWithContextAndRetry(parent context.Context, sensorType SensorType,
 	}
 }
 
-func gpioReadSeqUntilTimeout(p embd.DigitalPin, timeoutMsec int,
-	arr *[]int) error {
+func gpioReadSeqUntilTimeout(p gpio.PinIO, timeout time.Duration) ([]Pulse, error) {
 	var nextT time.Duration
 	var lastT time.Duration
 
-	var nextV int
-
 	maxPulseCount := 16000
-	//var values [maxPulseCount * 2]int
-	var values = make([]int64, maxPulseCount*2)
+	var pulses = make([]Pulse, maxPulseCount)
 
-	lastV, err := p.Read()
-	if err != nil {
-		fmt.Println("Failed to read value!")
-		return err
-	}
+	lastV := p.Read()
 
 	k, i := 0, 0
-	values[k*2] = int64(lastV)
+	pulses[k] = Pulse{Value: lastV, Duration: 0}
 
 	lastT = monotime.Now()
 
 	for {
-		// Because declarations
-		var err error
-
-		nextV, err = p.Read()
-		if err != nil {
-			fmt.Println("Failed to read value!")
-			return err
-		}
+		nextV := p.Read()
 
 		if lastV != nextV {
 			nextT = monotime.Now()
@@ -389,12 +352,12 @@ func gpioReadSeqUntilTimeout(p embd.DigitalPin, timeoutMsec int,
 			k++
 
 			if k > maxPulseCount-1 {
-				return errors.New(fmt.Sprintf("Pulse count exceed limit in %d\n",
+				return nil, errors.New(fmt.Sprintf("Pulse count exceed limit in %d\n",
 					maxPulseCount))
 			}
 
-			values[k*2] = int64(nextV)
-			values[k*2-1] = nextT.Nanoseconds()/int64(1000) - lastT.Nanoseconds()/int64(1000)
+			pulses[k] = Pulse{Value: nextV, Duration: 0}
+			pulses[k-1].Duration = nextT - lastT
 
 			lastV = nextV
 			lastT = nextT
@@ -403,82 +366,77 @@ func gpioReadSeqUntilTimeout(p embd.DigitalPin, timeoutMsec int,
 		if i > 20 {
 			nextT = monotime.Now()
 
-			if (nextT.Nanoseconds()/int64(1000)-lastT.Nanoseconds()/int64(1000))/1000 > int64(timeoutMsec) {
-				values[k*2+1] = int64(timeoutMsec * 1000)
+			if (nextT - lastT) > timeout {
+				pulses[k].Duration = timeout
 				break
 			}
 		}
 		i++
 	}
-
-	(*arr) = make([]int, (k+1)*2)
-
-	for i = 0; i <= k; i++ {
-		(*arr)[i*2] = int(values[i*2])
-		(*arr)[i*2+1] = int(values[i*2+1])
-	}
-
-	return nil
+	return pulses, nil
 }
 
 // TODO:  Convert all referenced C functions and variables
-func dialDHTxxAndRead(pin int, hsDurUsec int, boostPerfFlag int, arr *[]int) error {
+func dialDHTxxAndRead(pin gpio.PinIO, hsDurUsec time.Duration, boostPerfFlag int) ([]Pulse, error) {
 	// TODO:  Transcode function setMaxPriority
 	/*if boostPerfFlag != false; err := setMaxPriority(); err != nil {
 		return -1
 	}*/
 
 	// Initialize the GPIO interface
-	if err := embd.InitGPIO(); err != nil {
+	if state, err := host.Init(); err != nil {
 		// TODO:  Transcode function setDefaultPriority
 		//setDefaultPriority()
-		return fmt.Errorf("embd.InitGPIO: %v", err)
+		return nil, fmt.Errorf("Init: %v - %v", state, err)
 	}
-	defer embd.CloseGPIO()
-
-	// Open pin
-	p, err := embd.NewDigitalPin(pin)
-	if err != nil {
-		//setDefaultPriority()
-		return err
+	// Prints the loaded driver.
+	fmt.Printf("Using drivers:\n")
+	for _, driver := range state.Loaded {
+		fmt.Printf("- %s\n", driver)
 	}
-	defer p.Close()
 
-	// Set pin out for dial pulse
-	if err := p.SetDirection(embd.Out); err != nil {
-		//setDefaultPriority()
-		return err
+	// Prints the driver that were skipped as irrelevant on the platform.
+	fmt.Printf("Drivers skipped:\n")
+	for _, failure := range state.Skipped {
+		fmt.Printf("- %s: %s\n", failure.D, failure.Err)
+	}
+
+	// Having drivers failing to load may not require process termination. It
+	// is possible to continue to run in partial failure mode.
+	fmt.Printf("Drivers failed to load:\n")
+	for _, failure := range state.Failed {
+		fmt.Printf("- %s: %v\n", failure.D, failure.Err)
 	}
 
 	// Set pin to high
-	if err := p.Write(embd.High); err != nil {
-		//setDefaultPriority()
-		return err
+	if err := pin.Out(gpio.High); err != nil {
+		return nil, err
 	}
 
 	// Sleep 500 milliseconds
 	time.Sleep(500 * time.Millisecond)
 
 	// Set pin to low
-	if err := p.Write(embd.Low); err != nil {
-		//setDefaultPriority()
-		return err
+	if err := pin.Out(gpio.Low); err != nil {
+		pin.Out(gpio.High)
+		return nil, err
 	}
 
 	// Sleep 18 milliseconds according to DHTxx specification
 	time.Sleep(18 * time.Millisecond)
 
 	// Set pin in to receive dial response
-	if err := p.SetDirection(embd.In); err != nil {
-		//setDefaultPriority()
-		return err
+	if err := pin.In(gpio.PullUp, gpio.NoEdge); err != nil {
+		pin.Out(gpio.High)
+		return nil, err
 	}
 
 	// Read data from sensor
 	// TODO:  Transcode function gpioReadSeqUntilTimeout
-	if err := gpioReadSeqUntilTimeout(p, 10, arr); err != nil {
-		//setDefaultPriority()
-		return err
+	pulses, err := gpioReadSeqUntilTimeout(pin, 10*time.Millisecond)
+	if err != nil {
+		pin.Out(gpio.High)
+		return nil, err
 	}
 
 	/*if boostPerfFlag != false; err := setDefaultPriority(); err != nil {
@@ -486,5 +444,5 @@ func dialDHTxxAndRead(pin int, hsDurUsec int, boostPerfFlag int, arr *[]int) err
 		return err
 	}*/
 
-	return nil
+	return pulses, nil
 }

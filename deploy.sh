@@ -12,7 +12,7 @@ rsync -acvz --delete --no-owner --no-group --inplace -e "ssh -p $SSH_PORT" . "$H
 ssh -p "$SSH_PORT" "$HOST" 'bash -ex' <<EOF
 cd ~/dev/rpi_exporter
 
-# go build .
+# /usr/local/go/bin/go build -o rpi_exporter .
 /usr/local/go/bin/go build -o rpi_exporter ./d2r2/
 sudo ./rpi_exporter
 EOF
