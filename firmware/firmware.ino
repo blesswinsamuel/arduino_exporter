@@ -37,10 +37,9 @@ float temperature = -1;
 float heatIndex = -1;
 float ldrValue = -1;
 
-unsigned long currentMillis = 0;          // stores the value of millis() in each iteration of loop()
-unsigned long previousLedMillis = 0;      // will store last time the LED was updated
-unsigned long previousBuzzerMillis = 0;   // will store last time the Buzzer was updated
-unsigned long previousEspWriteMillis = 0; // will store last time the Buzzer was updated
+unsigned long currentMillis = 0;        // stores the value of millis() in each iteration of loop()
+unsigned long previousLedMillis = 0;    // will store last time the LED was updated
+unsigned long previousBuzzerMillis = 0; // will store last time the Buzzer was updated
 unsigned long previousDhtReadMillis = 0;
 
 void loop()
@@ -49,11 +48,7 @@ void loop()
     updateLedState();
     updateBuzzerState();
 
-    readDht();
-    readLdr();
-
     listenSerial();
-    writeSerial();
 
     writeState();
 }
@@ -63,21 +58,34 @@ void listenSerial()
     // listen for communication from the ESP8266 and then write it to the serial monitor
     if (Serial.available())
     {
-        String argName = Serial.readStringUntil('=');
-        String argValueStr = Serial.readStringUntil('\n');
-        int argValue = argValueStr.toInt();
-        Serial.println("ESP: " + argName + "=" + argValue + "$");
-        if (argName == "led")
+        String args = Serial.readStringUntil('\n');
+        if (args == "metrics")
         {
-            previousLedMillis = currentMillis;
-            ledDuration = argValue;
-            ledState = HIGH;
+            readDht();
+            readLdr();
+            String metrics = createMetricsString();
+            metrics.replace("\n", "$");
+            Serial.println("METRICS: " + metrics);
         }
-        if (argName == "buzzer")
+        else
         {
-            previousBuzzerMillis = currentMillis;
-            buzzerDuration = argValue;
-            buzzerState = HIGH;
+            int sep = args.indexOf("=");
+            String argName = args.substring(0, sep);
+            String argValueStr = args.substring(sep + 1);
+            int argValue = argValueStr.toInt();
+            Serial.println("LOG: " + argName + "=" + argValue + "$");
+            if (argName == "led")
+            {
+                previousLedMillis = currentMillis;
+                ledDuration = argValue;
+                ledState = HIGH;
+            }
+            if (argName == "buzzer")
+            {
+                previousBuzzerMillis = currentMillis;
+                buzzerDuration = argValue;
+                buzzerState = HIGH;
+            }
         }
     }
 }
@@ -142,32 +150,26 @@ void readLdr()
     ldrValue = analogRead(LDRPIN);
 }
 
-void writeSerial()
+String createMetricsString()
 {
-    const int writeInterval = 2000;
-    if (currentMillis - previousEspWriteMillis >= writeInterval)
+    String metrics = "";
+    if (temperature != -1)
     {
-        String message = "";
-        if (temperature != -1)
-        {
-            message += "pi_dht_temperature " + String(temperature) + "\n";
-        }
-        if (humidity != -1)
-        {
-            message += "pi_dht_humidity " + String(humidity) + "\n";
-        }
-        if (heatIndex != -1)
-        {
-            message += "pi_dht_heat_index " + String(heatIndex) + "\n";
-        }
-        if (ldrValue != -1)
-        {
-            message += "uno_ldr_value " + String(ldrValue) + "\n";
-        }
-        message.replace("\n", "$");
-        Serial.println(message);
-        previousEspWriteMillis = currentMillis;
+        metrics += "uno_dht_temperature " + String(temperature) + "\n";
     }
+    if (humidity != -1)
+    {
+        metrics += "uno_dht_humidity " + String(humidity) + "\n";
+    }
+    if (heatIndex != -1)
+    {
+        metrics += "uno_dht_heat_index " + String(heatIndex) + "\n";
+    }
+    if (ldrValue != -1)
+    {
+        metrics += "uno_ldr_value " + String(ldrValue) + "\n";
+    }
+    return metrics;
 }
 
 // arduino-cli compile --fqbn arduino:avr:uno --upload --port /dev/cu.usbmodem1421301 arduino/Metrics
