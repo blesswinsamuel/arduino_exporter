@@ -104,7 +104,7 @@ func (s *server) metrics(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	flag.Parse()
-	defer log.Init("ArduinoExporter", true, true, ioutil.Discard).Close()
+	defer log.Init("ArduinoExporter", true, false, ioutil.Discard).Close()
 
 	if *serialPort == "" {
 		flag.Usage()

@@ -7,10 +7,10 @@ WORKDIR /src
 
 ARG TARGETOS
 ARG TARGETARCH
-RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o rpi_exporter
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o arduino_exporter
 
 # final stage
 FROM scratch
 WORKDIR /app
-COPY --from=build-env /src/rpi_exporter /app/
-ENTRYPOINT ["/app/rpi_exporter"]
+COPY --from=build-env /src/arduino_exporter /app/
+ENTRYPOINT ["/app/arduino_exporter"]
