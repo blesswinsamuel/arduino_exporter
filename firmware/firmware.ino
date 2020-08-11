@@ -34,6 +34,8 @@ void setup()
 
 byte ledState = LOW;
 byte buzzerState = LOW;
+String lcd1Value = "Hello!";
+String lcd2Value = "------";
 int ledDuration = -1;
 int buzzerDuration = -1;
 
@@ -95,13 +97,13 @@ void listenSerial()
             }
             else if (argName == "lcd1")
             {
-                lcd.setCursor(0, 0);    // set the cursor to column 0, line 0
-                lcd.print(argValueStr); // Print a message to the LCD.
+                lcd.clear();
+                lcd1Value = argValueStr;
             }
             else if (argName == "lcd2")
             {
-                lcd.setCursor(0, 1);    // set the cursor to column 0, line 1
-                lcd.print(argValueStr); // Print a message to the LCD.
+                lcd.clear();
+                lcd2Value = argValueStr;
             }
         }
     }
@@ -135,6 +137,10 @@ void writeState()
 {
     digitalWrite(LEDPIN, ledState);
     digitalWrite(BUZZERPIN, buzzerState);
+    lcd.setCursor(0, 0);  // set the cursor to column 0, line 0
+    lcd.print(lcd1Value); // Print a message to the LCD.
+    lcd.setCursor(0, 1);  // set the cursor to column 0, line 1
+    lcd.print(lcd2Value); // Print a message to the LCD.
 }
 
 void readDht()

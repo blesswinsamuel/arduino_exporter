@@ -10,9 +10,11 @@ SSH_PORT=${SSH_PORT:-2222}
 HOST="$SSH_USER@$SSH_HOST"
 
 ssh -p "$SSH_PORT" "$HOST" 'bash -ex' <<EOF
+docker stop arduino-exporter
 mkdir -p /tmp/firmware
 EOF
 scp -P "$SSH_PORT" ./firmware/firmware.ino $HOST:/tmp/firmware/firmware.ino
 ssh -p "$SSH_PORT" "$HOST" 'bash -ex' <<EOF
 arduino-cli compile --fqbn arduino:avr:uno --upload --port /dev/ttyACM0 /tmp/firmware
+docker start arduino-exporter
 EOF
