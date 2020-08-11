@@ -3,6 +3,7 @@
 // - Adafruit Unified Sensor Lib: https://github.com/adafruit/Adafruit_Sensor
 #include <DHT.h>
 #include <SoftwareSerial.h>
+#include <LiquidCrystal.h>
 
 #define DHTPIN 4
 #define LEDPIN 5
@@ -17,11 +18,15 @@
 // Connect a 10K resistor from pin 2 (data) to pin 1 (power) of the sensor
 
 DHT dht(DHTPIN, DHT11);
+LiquidCrystal lcd(12, 11, 7, 8, 9, 10);
 
 void setup()
 {
     Serial.begin(9600); // communication with the host computer
     dht.begin();
+
+    lcd.begin(16, 2); // set up the LCD's number of columns and rows
+    lcd.print("hello!");
 
     pinMode(LEDPIN, OUTPUT);
     pinMode(BUZZERPIN, OUTPUT);
@@ -61,9 +66,9 @@ void listenSerial()
         String args = Serial.readStringUntil('\n');
         if (args == "metrics")
         {
+            readLdr(); // Take LDR reading before flashing the LED
             digitalWrite(LEDPIN, HIGH);
             readDht();
-            readLdr();
             String metrics = createMetricsString();
             metrics.replace("\n", "$");
             Serial.println("METRICS: " + metrics);
@@ -73,19 +78,30 @@ void listenSerial()
             int sep = args.indexOf("=");
             String argName = args.substring(0, sep);
             String argValueStr = args.substring(sep + 1);
-            int argValue = argValueStr.toInt();
-            Serial.println("LOG: " + argName + "=" + argValue + "$");
+            Serial.println("LOG: " + argName + "=" + argValueStr + "$");
             if (argName == "led")
             {
+                int argValue = argValueStr.toInt();
                 previousLedMillis = currentMillis;
                 ledDuration = argValue;
                 ledState = HIGH;
             }
-            if (argName == "buzzer")
+            else if (argName == "buzzer")
             {
+                int argValue = argValueStr.toInt();
                 previousBuzzerMillis = currentMillis;
                 buzzerDuration = argValue;
                 buzzerState = HIGH;
+            }
+            else if (argName == "lcd1")
+            {
+                lcd.setCursor(0, 0);    // set the cursor to column 0, line 0
+                lcd.print(argValueStr); // Print a message to the LCD.
+            }
+            else if (argName == "lcd2")
+            {
+                lcd.setCursor(0, 1);    // set the cursor to column 0, line 1
+                lcd.print(argValueStr); // Print a message to the LCD.
             }
         }
     }
