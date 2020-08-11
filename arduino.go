@@ -89,8 +89,6 @@ func (s *server) ledBlink(duration int) {
 }
 
 func (s *server) metrics(w http.ResponseWriter, r *http.Request) {
-	s.ledBlink(-1)
-	defer s.ledBlink(0)
 	if err := s.sendSerialCommand("metrics"); err != nil {
 		log.Error(err)
 		w.Write([]byte(""))

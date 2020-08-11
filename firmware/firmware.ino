@@ -61,6 +61,7 @@ void listenSerial()
         String args = Serial.readStringUntil('\n');
         if (args == "metrics")
         {
+            digitalWrite(LEDPIN, HIGH);
             readDht();
             readLdr();
             String metrics = createMetricsString();
