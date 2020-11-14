@@ -1,198 +1,208 @@
-// REQUIRES the following Arduino libraries:
-// - DHT Sensor Library: https://github.com/adafruit/DHT-sensor-library
-// - Adafruit Unified Sensor Lib: https://github.com/adafruit/Adafruit_Sensor
-#include <DHT.h>
+#include <ESP8266WiFi.h>
+//#include <WiFiClient.h>
+#include <ESP8266WebServer.h>
+#include <ESP8266HTTPClient.h>
 #include <SoftwareSerial.h>
-#include <LiquidCrystal.h>
 
-#define DHTPIN 4
-#define LEDPIN 5
-#define BUZZERPIN 6
-#define LDRPIN A0
+#define STASSID "EL-BETHEL"
+#define STAPSK "150230111995"
 
-// Connect pin 1 (on the left) of the sensor to +5V
-// NOTE: If using a board with 3.3V logic like an Arduino Due connect pin 1
-// to 3.3V instead of 5V!
-// Connect pin 2 of the sensor to whatever your DHTPIN is
-// Connect pin 4 (on the right) of the sensor to GROUND
-// Connect a 10K resistor from pin 2 (data) to pin 1 (power) of the sensor
+#define LEDPIN D0
 
-DHT dht(DHTPIN, DHT11);
-LiquidCrystal lcd(12, 11, 7, 8, 9, 10);
+const char *ssid = STASSID;
+const char *password = STAPSK;
+
+ESP8266WebServer server(80);
+SoftwareSerial arduinoSerial(D1, D2);
+
+String prometheusMetrics = "";
+
+int PIR_PIN = D3;
+
+void handleMetrics()
+{
+    digitalWrite(LEDPIN, LOW);
+    arduinoWriteLine("metrics");
+    String prometheusMetrics = arduinoReadLine("METRICS");
+    server.send(200, "text/plain", prometheusMetrics);
+    digitalWrite(LEDPIN, HIGH);
+}
+
+void handleNotFound()
+{
+    digitalWrite(LEDPIN, LOW);
+    String message = "File Not Found\n\n";
+    message += "URI: ";
+    message += server.uri();
+    message += "\nMethod: ";
+    message += (server.method() == HTTP_GET) ? "GET" : "POST";
+    message += "\nArguments: ";
+    message += server.args();
+    message += "\n";
+    for (uint8_t i = 0; i < server.args(); i++)
+    {
+        message += " " + server.argName(i) + ": " + server.arg(i) + "\n";
+    }
+    server.send(404, "text/plain", message);
+    digitalWrite(LEDPIN, HIGH);
+}
+
+void handleArduino()
+{
+    digitalWrite(LEDPIN, LOW);
+    int args = server.args();
+    if (args > 0)
+    {
+        String message = "";
+        for (uint8_t i = 0; i < args; i++)
+        {
+            message += server.argName(i) + "=" + server.arg(i) + "$";
+        }
+        // Send all at once - otherwise it shows up on arduino garbled
+        arduinoWriteLine(message);
+        server.send(200, "text/plain", F("OK"));
+    }
+    else
+    {
+        server.send(400, "text/plain", F("KO"));
+    }
+    digitalWrite(LEDPIN, HIGH);
+}
 
 void setup()
 {
-    Serial.begin(9600); // communication with the host computer
-    dht.begin();
-
-    lcd.begin(16, 2); // set up the LCD's number of columns and rows
-    lcd.print("hello!");
-
     pinMode(LEDPIN, OUTPUT);
-    pinMode(BUZZERPIN, OUTPUT);
+    digitalWrite(LEDPIN, LOW);
+    delay(3000);
+    digitalWrite(LEDPIN, HIGH);
+    Serial.begin(115200);
+    arduinoSerial.begin(14400);
+
+    Serial.println();
+    Serial.print("Configuring access point...");
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, password);
+    Serial.println();
+
+    // Wait for connection
+    Serial.print("Connecting.");
+    while (WiFi.status() != WL_CONNECTED)
+    {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println();
+    Serial.print("Connected to ");
+    Serial.println(ssid);
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+    Serial.print("DNS address: ");
+    Serial.println(WiFi.dnsIP());
+
+    server.on("/inline", []() {
+        server.send(200, "text/plain", "this works as well");
+    });
+
+    server.on("/metrics", handleMetrics);
+
+    server.on("/arduino", handleArduino);
+
+    server.onNotFound(handleNotFound);
+
+    server.begin();
+    Serial.println("HTTP server started");
+
+    // temporary code for PIR sensor
+    pinMode(PIR_PIN, INPUT);
 }
 
-byte ledState = LOW;
-byte buzzerState = LOW;
-String lcd1Value = "Hello!";
-String lcd2Value = "------";
-int ledDuration = -1;
-int buzzerDuration = -1;
+void arduinoWriteLine(String msg)
+{
+    Serial.println("Sending message: " + msg);
+    arduinoSerial.print(msg + "\n");
+}
 
-float humidity = -1;
-float temperature = -1;
-float heatIndex = -1;
-float ldrValue = -1;
+String arduinoReadLine(String prefix)
+{
+    //    String msg = "";
+    //    char ch;
+    //    while (ch != '\n') {
+    //        ch = arduinoSerial.read();
+    //        msg += ch;
+    //    } ;
+    unsigned long startTime = millis();
+    while (true)
+    {
+        while (arduinoSerial.available() <= 0)
+        {
+            if (millis() - startTime > 1000)
+            {
+                return "";
+            }
+        }
 
-unsigned long currentMillis = 0;        // stores the value of millis() in each iteration of loop()
-unsigned long previousLedMillis = 0;    // will store last time the LED was updated
-unsigned long previousBuzzerMillis = 0; // will store last time the Buzzer was updated
-unsigned long previousDhtReadMillis = 0;
+        String msg = arduinoSerial.readStringUntil('\n');
+        // Serial.println("Received message: " + msg);
+        if (!msg.startsWith(prefix + ": "))
+        {
+            continue;
+        }
+        msg = msg.substring(prefix.length() + 2);
+        msg.replace('$', '\n');
+        return msg;
+    }
+    return "";
+}
 
 void loop()
 {
-    currentMillis = millis();
-    updateLedState();
-    updateBuzzerState();
-
-    listenSerial();
-
-    writeState();
+    server.handleClient();
+    handlePIR();
 }
 
-void listenSerial()
+// temporary code for PIR sensor
+int pir_value = -1;
+
+void handlePIR()
 {
-    // listen for communication from the ESP8266 and then write it to the serial monitor
-    if (Serial.available())
-    {
-        String args = Serial.readStringUntil('\n');
-        if (args == "metrics")
-        {
-            readLdr(); // Take LDR reading before flashing the LED
-            digitalWrite(LEDPIN, HIGH);
-            readDht();
-            String metrics = createMetricsString();
-            metrics.replace("\n", "$");
-            Serial.println("METRICS: " + metrics);
-        }
-        else
-        {
-            int sep = args.indexOf("=");
-            String argName = args.substring(0, sep);
-            String argValueStr = args.substring(sep + 1);
-            Serial.println("LOG: " + argName + "=" + argValueStr + "$");
-            if (argName == "led")
-            {
-                int argValue = argValueStr.toInt();
-                previousLedMillis = currentMillis;
-                ledDuration = argValue;
-                ledState = HIGH;
-            }
-            else if (argName == "buzzer")
-            {
-                int argValue = argValueStr.toInt();
-                previousBuzzerMillis = currentMillis;
-                buzzerDuration = argValue;
-                buzzerState = HIGH;
-            }
-            else if (argName == "lcd1")
-            {
-                lcd.clear();
-                lcd1Value = argValueStr;
-            }
-            else if (argName == "lcd2")
-            {
-                lcd.clear();
-                lcd2Value = argValueStr;
-            }
-        }
-    }
+    int new_pir_value = digitalRead(PIR_PIN);
+    if (new_pir_value == pir_value)
+        return;
+    pir_value = new_pir_value;
+    sendEvent(PIR_PIN, pir_value);
 }
 
-void updateLedState()
+void sendEvent(byte pin, bool state)
 {
-    if (ledState == HIGH)
+    HTTPClient http;
+    String req_string;
+    String ip = "192.168.1.5";
+    req_string = "http://";
+    req_string += ip;
+    req_string += "/api/webhook";
+    Serial.println(req_string);
+    http.begin(req_string);
+    http.addHeader("Content-Type", "text/plain");
+
+    String put_string;
+    put_string = "pin=";
+    put_string += pin;
+    put_string += "&state=";
+    put_string += state;
+    Serial.println(put_string);
+
+    int httpResponseCode = http.PUT(put_string);
+
+    if (httpResponseCode > 0)
     {
-        if (currentMillis - previousLedMillis >= ledDuration)
-        {
-            ledState = LOW;
-            previousLedMillis = currentMillis;
-        }
+        // String response = http.getString();
+        Serial.println(httpResponseCode);
+        // Serial.println(response);
     }
+    else
+    {
+        Serial.print("Error on sending PUT Request: ");
+        Serial.println(httpResponseCode);
+    }
+    http.end();
 }
-
-void updateBuzzerState()
-{
-    if (buzzerState == HIGH)
-    {
-        if (currentMillis - previousBuzzerMillis >= buzzerDuration)
-        {
-            buzzerState = LOW;
-            previousBuzzerMillis = currentMillis;
-        }
-    }
-}
-
-void writeState()
-{
-    digitalWrite(LEDPIN, ledState);
-    digitalWrite(BUZZERPIN, buzzerState);
-    lcd.setCursor(0, 0);  // set the cursor to column 0, line 0
-    lcd.print(lcd1Value); // Print a message to the LCD.
-    lcd.setCursor(0, 1);  // set the cursor to column 0, line 1
-    lcd.print(lcd2Value); // Print a message to the LCD.
-}
-
-void readDht()
-{
-    const int readDuration = 2000;
-    if (currentMillis - previousDhtReadMillis >= readDuration)
-    {
-        previousDhtReadMillis = currentMillis;
-
-        // Reading temperature or humidity takes about 250 milliseconds!
-        // Sensor readings may also be up to 2 seconds 'old' (its a very slow sensor)
-        float h = dht.readHumidity();
-        // Read temperature as Celsius (the default)
-        float t = dht.readTemperature();
-
-        // Check if any reads failed and exit early (to try again).
-        if (isnan(h) || isnan(t))
-        {
-            Serial.println(F("LOG: Failed to read from DHT sensor!"));
-            return;
-        }
-        temperature = t;
-        humidity = h;
-        heatIndex = dht.computeHeatIndex(temperature, humidity, false);
-    }
-}
-
-void readLdr()
-{
-    ldrValue = analogRead(LDRPIN);
-}
-
-String createMetricsString()
-{
-    String metrics = "";
-    if (temperature != -1)
-    {
-        metrics += "uno_dht_temperature " + String(temperature) + "\n";
-    }
-    if (humidity != -1)
-    {
-        metrics += "uno_dht_humidity " + String(humidity) + "\n";
-    }
-    if (heatIndex != -1)
-    {
-        metrics += "uno_dht_heat_index " + String(heatIndex) + "\n";
-    }
-    if (ldrValue != -1)
-    {
-        metrics += "uno_ldr_value " + String(ldrValue) + "\n";
-    }
-    return metrics;
-}
-
-// arduino-cli compile --fqbn arduino:avr:uno --upload --port /dev/cu.usbmodem1421301 arduino/Metrics

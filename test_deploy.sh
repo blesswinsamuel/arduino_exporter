@@ -8,24 +8,24 @@ HOST="$SSH_USER@$SSH_HOST"
 
 export GOOS=linux
 export GOARCH=arm
-# go build -o /tmp/rpi_exporter ./maintest/
-go build -o /tmp/rpi_exporter .
+# go build -o /tmp/home-controller ./maintest/
+go build -o /tmp/home-controller .
 
 ssh -p "$SSH_PORT" "$HOST" 'bash -ex' <<EOF
-sudo killall -9 rpi_exporter || true
+sudo killall -9 home-controller || true
 EOF
-scp -P "$SSH_PORT" /tmp/rpi_exporter $HOST:/tmp/rpi_exporter
+scp -P "$SSH_PORT" /tmp/home-controller $HOST:/tmp/home-controller
 ssh -p "$SSH_PORT" "$HOST" 'bash -ex' <<EOF
-sudo /tmp/rpi_exporter
+sudo /tmp/home-controller
 EOF
 
 # # --inplace is needed to preserve docker volumes (for file volume)
-# rsync -acvz --delete --no-owner --no-group --inplace -e "ssh -p $SSH_PORT" . "$HOST:~/dev/rpi_exporter/"
+# rsync -acvz --delete --no-owner --no-group --inplace -e "ssh -p $SSH_PORT" . "$HOST:~/dev/home-controller/"
 
 # ssh -p "$SSH_PORT" "$HOST" 'bash -ex' <<EOF
-# cd ~/dev/rpi_exporter
+# cd ~/dev/home-controller
 
-# # /usr/local/go/bin/go build -o rpi_exporter .
-# /usr/local/go/bin/go build -o rpi_exporter ./maintest/
-# sudo ./rpi_exporter
+# # /usr/local/go/bin/go build -o home-controller .
+# /usr/local/go/bin/go build -o home-controller ./maintest/
+# sudo ./home-controller
 # EOF

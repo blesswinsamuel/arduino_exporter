@@ -100,9 +100,20 @@ func (s *server) metrics(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(metrics))
 }
 
+func (s *server) handleWebhook(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	device := query.Get("device")
+	if device == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
 func main() {
 	flag.Parse()
-	defer log.Init("ArduinoExporter", true, false, ioutil.Discard).Close()
+	defer log.Init("HomeController", true, false, ioutil.Discard).Close()
 
 	if *serialPort == "" {
 		flag.Usage()
@@ -130,7 +141,7 @@ func main() {
 			<p><a href="` + *metricsPath + `">Metrics</a></p>
 			</body></html>`))
 	})
-	http.HandleFunc("/arduino", s.handleArduino)
+	http.HandleFunc("/webhook", s.handleWebhook)
 	log.Infoln("Listening on", *listen)
 	log.Infoln("Serving metrics under", *metricsPath)
 	log.Fatal(http.ListenAndServe(*listen, nil))

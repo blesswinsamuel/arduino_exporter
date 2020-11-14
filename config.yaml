@@ -1,0 +1,10 @@
+devices:
+  - type: philips-hue
+    name: Philips Hue
+    config:
+      address: "192.168.1.50"
+      username: ZrPGcoMN46NbaQ9wzhqczZcD2Apj7fuQmRrKDVe6
+  - type: esp-8266
+    name: ESP 8266
+    config:
+      pin-0:
